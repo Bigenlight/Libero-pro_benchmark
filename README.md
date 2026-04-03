@@ -23,13 +23,35 @@ OpenVLA, Pi0 같은 SOTA VLA 모델도 원본 LIBERO에서 90%+ 달성하지만,
 
 ---
 
+## Prerequisites
+
+실험 서버에 아래가 설치되어 있어야 한다:
+
+```bash
+# 1. Docker
+curl -fsSL https://get.docker.com | sh
+
+# 2. NVIDIA Container Toolkit (--gpus all 동작에 필수)
+curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | sudo gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
+curl -s -L https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list | \
+  sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' | \
+  sudo tee /etc/apt/sources.list.d/nvidia-container-toolkit.list
+sudo apt-get update && sudo apt-get install -y nvidia-container-toolkit
+sudo systemctl restart docker
+
+# 설치 확인
+docker run --rm --gpus all nvidia/cuda:11.3.1-base-ubuntu20.04 nvidia-smi
+```
+
+---
+
 ## Docker 이미지
 
 **Docker Hub**: [`bigenlight/libero-pro`](https://hub.docker.com/r/bigenlight/libero-pro)
 
 | 태그 | 내용 | 크기 |
 |------|------|------|
-| `v1.0`, `latest` | Base 환경 (eval/inference용) | ~23GB |
+| `v1.0` = `latest` | Base 환경 (eval/inference용) | ~23GB |
 | `train` | Base + 학습 데이터셋 포함 (예정) | ~60GB+ |
 
 ### 이미지 구성
@@ -37,7 +59,7 @@ OpenVLA, Pi0 같은 SOTA VLA 모델도 원본 LIBERO에서 90%+ 달성하지만,
 - Ubuntu 20.04 + CUDA 11.3.1 + cuDNN 8
 - Python 3.8.10 / PyTorch 1.11.0+cu113
 - robosuite 1.4.0 / robomimic 0.2.0 / LIBERO-PRO
-- Node.js 20 LTS + **Claude Code v2.1.91** 내장
+- Node.js 20 LTS + **Claude Code** (빌드 시점 최신 버전) 내장
 - 버그 픽스 3개 적용 완료 (아래 참고)
 
 ---
@@ -60,9 +82,18 @@ docker run -it --gpus all --shm-size=16g \
 ```
 
 ```bash
-# Claude Code 사용 (구독 계정 연결)
+# Claude Code 사용 — 구독 계정 연결 (권장)
+# 사전 준비: 현재 머신에서 `claude` 실행 후 Claude.ai 로그인 (1회)
 docker run -it --gpus all --shm-size=16g \
   -v ~/.claude:/root/.claude \
+  -e MUJOCO_GL=egl \
+  bigenlight/libero-pro:latest bash
+```
+
+```bash
+# Claude Code 사용 — API 키 방식
+docker run -it --gpus all --shm-size=16g \
+  -e ANTHROPIC_API_KEY=sk-ant-xxxx \
   -e MUJOCO_GL=egl \
   bigenlight/libero-pro:latest bash
 ```
@@ -77,9 +108,6 @@ docker run -it --gpus all --shm-size=16g \
   -e CUDA_VISIBLE_DEVICES=0 \
   bigenlight/libero-pro:latest bash
 ```
-
-> **Claude Code**: `ANTHROPIC_API_KEY` 환경변수 또는 `~/.claude` 마운트 중 택일.  
-> API 키 방식: `-e ANTHROPIC_API_KEY=sk-ant-xxxx`
 
 ### 3. 컨테이너 내부 확인
 
@@ -100,6 +128,35 @@ claude
 
 ---
 
+## 데이터셋 준비
+
+학습(train) 또는 init_states가 필요한 평가를 위해 다음 데이터를 다운로드한다.
+
+```bash
+# 컨테이너 내부 또는 호스트에서 실행
+pip install huggingface_hub
+
+# LIBERO-PRO bddl/init 파일 (OOD 평가용)
+python -c "
+from huggingface_hub import snapshot_download
+snapshot_download(
+    'zhouxueyang/LIBERO-Pro',
+    repo_type='dataset',
+    local_dir='/tmp/libero-pro-data'
+)
+"
+cp -r /tmp/libero-pro-data/bddl_files/* /workspace/LIBERO-PRO/libero/libero/bddl_files/
+cp -r /tmp/libero-pro-data/init_files/*  /workspace/LIBERO-PRO/libero/libero/init_files/
+
+# 학습 데모 데이터 (bc_transformer baseline 학습용)
+cd /workspace/LIBERO-PRO
+python benchmark_scripts/download_libero_datasets.py --datasets all --use-huggingface
+```
+
+> **참고**: `datasets` 경로 Warning은 정상. `-v` 마운트 또는 다운로드 후 사라짐.
+
+---
+
 ## 실험 서버 스펙 (원격 서버 `aadd`)
 
 | 항목 | 사양 |
@@ -111,7 +168,7 @@ claude
 | GPU | RTX A6000 × 4장 (48GB × 4 = **192GB VRAM**) |
 | CUDA | 12.4 / Driver 550.144.03 |
 
-> CUDA 12.4 호스트에서 CUDA 11.3 컨테이너 실행 가능 (forward compatibility).
+> CUDA 12.4 호스트에서 CUDA 11.3 컨테이너 실행 가능 (하위 호환).
 
 ### 192GB VRAM으로 가능한 실험
 
@@ -122,12 +179,12 @@ claude
 | SpatialVLA (4B) | ~8GB | GPU 1장으로 가능 |
 | SmolVLA (450M) | ~2GB | GPU 1장으로 가능 |
 | pi0 (3B) | ~8GB | GPU 1장으로 가능 |
-| **pi0.5 Full FT** | ~70GB | **GPU 2장으로 가능** |
+| **pi0.5 Full FT** | ~70GB | **GPU 2장으로 가능** (추정치) |
 | 멀티 모델 동시 평가 | — | 4장 독립 실행 가능 |
 
 ---
 
-## 현재 상태 (2026-04-03)
+## 현재 상태
 
 - [x] Docker 이미지 빌드 완료 (`bigenlight/libero-pro:v1.0`)
 - [x] Docker Hub 푸시 완료
@@ -137,36 +194,6 @@ claude
 - [ ] `train` 태그 이미지 (데이터셋 포함) 빌드
 - [ ] bc_transformer_policy baseline 학습
 - [ ] VLA 모델 LIBERO-PRO 평가
-
----
-
-## 적용된 버그 픽스
-
-### Bug 1: `ood_object.yaml` line 39 — 빈 키
-```yaml
-# 수정 전
-    :
-      - yellow_cabinet
-# 수정 후
-    wooden_cabinet:
-      - yellow_cabinet
-```
-
-### Bug 2: `perturbation.py` line 658 — seed 타입 버그
-```python
-# 수정 전
-seed=configs.get("seed", int),
-# 수정 후
-seed=configs.get("seed", 42),
-```
-
-### Bug 3: `generate_init_states.py` — 포맷 불일치
-```python
-# 수정 전: zipfile+pickle (evaluate.py의 torch.load와 불일치)
-with zipfile.ZipFile(output_filepath, 'w', ...) as zipf: ...
-# 수정 후
-torch.save(np.array(all_initial_states), output_filepath)
-```
 
 ---
 
@@ -209,9 +236,12 @@ python libero/lifelong/evaluate.py \
 ### Phase 4: Position Perturbation Intensity
 
 ```bash
+# bddl_files 내 libero_object_temp_x0.1 ~ x0.5 사전 생성 파일 사용
 for INTENSITY in x0.1 x0.2 x0.3 x0.4 x0.5; do
   cp -r libero/libero/bddl_files/libero_object_temp_${INTENSITY}/* \
         libero/libero/bddl_files/libero_object_temp/
+  cp -r libero/libero/init_files/libero_object_temp_${INTENSITY}/* \
+        libero/libero/init_files/libero_object_temp/
   # 평가 실행
 done
 ```
@@ -231,12 +261,75 @@ done
 
 ---
 
+## Troubleshooting
+
+**EGL 렌더링 실패**
+```bash
+# 증상: EGL initialization failed / 검은 화면
+# 해결: osmesa fallback
+docker run ... -e MUJOCO_GL=osmesa ...
+```
+
+**`--gpus all` 미동작**
+```bash
+# nvidia-container-toolkit 설치 여부 확인
+nvidia-container-cli info
+# 미설치 시 Prerequisites 섹션 참고
+```
+
+**robosuite import 오류 (`SingleArmEnv` not found)**
+```bash
+# robosuite 1.5+ 설치된 경우
+pip install robosuite==1.4.0
+```
+
+**datasets 경로 Warning**
+```bash
+# 정상 동작 — 데이터셋을 volume mount하거나 컨테이너 내부에 다운로드하면 해결
+docker run ... -v /host/path/datasets:/workspace/LIBERO-PRO/libero/datasets ...
+```
+
+---
+
 ## 앞으로 방향
 
 1. **eval 이미지 검증** — 원격 서버에서 벤치마크 로딩 및 환경 렌더링 확인
 2. **train 이미지 빌드** — 학습 데이터셋(libero_spatial/object/goal/10) 포함 레이어 추가
 3. **VLA 모델 통합** — OpenVLA-OFT 기준으로 LIBERO-PRO perturbation 평가 파이프라인 구축
 4. **결과 공개** — 모델별 robustness drop 분석 및 leaderboard 제출
+
+---
+
+<details>
+<summary>적용된 버그 픽스 (클릭해서 펼치기)</summary>
+
+### Bug 1: `ood_object.yaml` line 39 — 빈 키
+```yaml
+# 수정 전
+    :
+      - yellow_cabinet
+# 수정 후
+    wooden_cabinet:
+      - yellow_cabinet
+```
+
+### Bug 2: `perturbation.py` line 658 — seed 타입 버그
+```python
+# 수정 전
+seed=configs.get("seed", int),
+# 수정 후
+seed=configs.get("seed", 42),
+```
+
+### Bug 3: `generate_init_states.py` — 저장 포맷 불일치
+```python
+# 수정 전: zipfile+pickle (evaluate.py의 torch.load와 불일치)
+with zipfile.ZipFile(output_filepath, 'w', ...) as zipf: ...
+# 수정 후
+torch.save(np.array(all_initial_states), output_filepath)
+```
+
+</details>
 
 ---
 
