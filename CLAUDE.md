@@ -1,0 +1,153 @@
+# CLAUDE.md — LIBERO-PRO 프로젝트 컨텍스트
+
+> 이 파일은 Claude Code가 대화 시작 시 자동으로 읽는 프로젝트 instruction 파일이다.
+
+---
+
+## 프로젝트 개요
+
+LIBERO-PRO 벤치마크로 VLA(Vision-Language-Action) 모델의 OOD 일반화 능력을 평가하는 실험 환경.
+Docker 이미지(`bigenlight/libero-pro:latest`) 기반으로 재현 가능한 실험 파이프라인을 구축 중.
+
+---
+
+## 리포 구조
+
+```
+Libero-pro/
+├── CLAUDE.md              # 이 파일 (프로젝트 컨텍스트)
+├── README.md              # 전체 setup 가이드 + 실험 계획
+├── LIBERO_PRO_PLAN.md     # 실험 상세 계획서
+├── Dockerfile             # Docker 이미지 빌드 (CUDA 11.3 + robosuite + Claude Code)
+├── run.sh                 # Docker 컨테이너 실행 스크립트
+├── test_local.py          # 컨테이너 내부 8단계 검증 스크립트
+├── LIBERO/                # 원본 LIBERO 벤치마크 (git submodule, 수정 없음)
+└── LIBERO-PRO/            # LIBERO-PRO 확장 코드 (수정 없음)
+    ├── perturbation.py        # OOD perturbation 엔진 (5종)
+    ├── evaluation_config.yaml # perturbation 플래그 설정
+    ├── libero_ood/            # OOD YAML configs (5개)
+    └── libero/                # LIBERO 코드 + PRO 확장 benchmark 등록
+```
+
+---
+
+## 원본 코드 변경 이력
+
+> **LIBERO/, LIBERO-PRO/, Dockerfile 코드는 수정하지 않았다.**
+> 아래는 리포 루트에서 추가/수정한 파일만 기록한다.
+
+### 2026-04-07: 로컬 Docker 검증 환경 구축
+
+#### `run.sh` (수정 — 기존 빈 파일 0 bytes → 174줄)
+
+원래 빈 파일이었던 `run.sh`를 Docker 컨테이너 실행 스크립트로 재작성했다.
+
+- Docker 이미지 pull 여부 자동 체크
+- nvidia runtime / GPU 존재 확인 (pre-flight)
+- `--gpus all --shm-size=8g` 으로 컨테이너 실행
+- EGL 렌더링 우선 시도, 실패 시 자동 OSMesa fallback
+- Claude Code 인증 자동 주입 (구독 `.credentials.json` 마운트 또는 `--api-key` 플래그)
+- `--api-key` 플래그와 `ANTHROPIC_API_KEY` 환경변수 이중 주입 방지 로직
+- `test_local.py`를 read-only 마운트하여 컨테이너 내부에서 실행
+- 출력물(PNG/MP4)은 호스트의 `./test_outputs/`에 volume mount
+- `--shell` 모드로 대화형 셸 진입 가능
+
+> **주의 (bash -c + 변수 결합)**: `ENTRYPOINT_CMD` 변수 안에 heredoc이나 multiline if-fi 블록이 있으면
+> `bash -c "$VAR && cmd"` 형태로 연결 시 syntax error 발생. trailing newline 뒤에 `&&`가 오면
+> bash가 파싱을 실패함. 해결: `&&` 대신 개행(`\n`)으로 명령을 분리 (`bash -c "$VAR\ncmd"`).
+
+```bash
+./run.sh                          # 기본 실행 (EGL → osmesa fallback)
+./run.sh --skip-video             # 비디오 테스트 스킵
+./run.sh --skip-pro               # LIBERO-PRO 테스트 스킵
+./run.sh --api-key sk-ant-xxxx    # API 키 방식
+./run.sh --shell                  # bash 셸 진입
+```
+
+#### `test_local.py` (신규 — 389줄)
+
+컨테이너 내부(`/workspace/LIBERO-PRO`)에서 실행되는 8단계 검증 스크립트.
+
+| # | 테스트 | GPU 필요 | 검증 내용 |
+|---|--------|----------|-----------|
+| 1 | Basic Environment | X | Python 3.8, PyTorch 1.11, CUDA, robosuite 1.4.0, bddl/init 경로 |
+| 2 | LIBERO Benchmark Loading | X | 5개 suite 로딩, task 수 (10/10/10/10/90), bddl 파일 존재 |
+| 3 | Env Creation + Reset | O | OffScreenRenderEnv 생성, obs dict 검증, 128x128 이미지 |
+| 4 | Rendering (PNG) | O | agentview + eye-in-hand 이미지 → PNG 저장 |
+| 5 | Simulation Step | O | 10 step zero action, reward/done/check_success 검증 |
+| 6 | LIBERO-PRO Loading | X | OOD benchmark suite 20개 등록 확인 |
+| 7 | Perturbation System | X | BDDLParser + 5개 perturbator in-memory 테스트 |
+| 8 | Video Rendering | O | 30 frame rollout → mp4 저장 |
+
+설계 결정:
+- 각 env 테스트는 `contextmanager`로 `env.close()` 보장 (GPU 메모리 누수 방지)
+- 128x128 해상도 사용 (RTX 3060 12GB에서 안전)
+- `signal.SIGALRM` 기반 120초 timeout (env.reset()의 RandomizationError 무한루프 방지)
+- Perturbation 테스트는 디스크 쓰기 없이 in-memory만 (process_bddl_file_mixed 호출 안 함)
+- OOD suite는 bddl/init 파일이 없으므로 클래스 로딩만 확인 (env 생성 안 함)
+
+#### `CLAUDE.md` (신규 — 이 파일)
+
+프로젝트 컨텍스트와 변경 이력을 기록하여 다음 대화에서 자동으로 읽히도록 함.
+
+---
+
+## Docker 이미지 정보
+
+- **이미지**: `bigenlight/libero-pro:latest` (= `v1.0`)
+- **크기**: ~23GB
+- **WORKDIR**: `/workspace/LIBERO-PRO`
+- **렌더링**: `MUJOCO_GL=egl` (기본), `osmesa` (fallback)
+- **버그 3개 패치 완료** (이미지 빌드 시 적용):
+  1. `ood_object.yaml` line 39 빈 키 → `wooden_cabinet:` 
+  2. `perturbation.py` line 658 `seed=int` → `seed=42`
+  3. `generate_init_states.py` zipfile → `torch.save()`
+- **이미지 재빌드 없이** `test_local.py`를 마운트해서 테스트 가능
+
+---
+
+## 현재 진행 상태
+
+- [x] Docker 이미지 빌드/푸시/검증 완료
+- [x] 로컬 검증 스크립트 작성 완료 (`run.sh` + `test_local.py`)
+- [x] 로컬에서 `./run.sh` 실행 — **8/8 PASS** (EGL, RTX 3060 12GB, 2026-04-07)
+- [ ] 원격 서버(aadd, RTX A6000 x4)에서 eval 검증
+- [ ] train 이미지 빌드 (데이터셋 포함)
+- [ ] bc_transformer baseline 학습
+- [ ] VLA 모델 LIBERO-PRO 평가
+
+---
+
+## 알려진 이슈
+
+| Issue | 상태 | 비고 |
+|-------|------|------|
+| `use_task` 언어 지시 버그 (#14) | 미해결 | VLA 통합 시 workaround 필요 |
+| OpenVLA 결과 불일치 (#20) | 미확인 | 평가 전 확인 필요 |
+| Environment BDDL 미출시 (#9) | 업스트림 대기 | `ood_environment.yaml`은 있으나 데이터 미완 |
+| OOD suite init_states 미생성 | 정상 | HuggingFace에서 다운로드 또는 generate_init_states.py 실행 필요 |
+
+---
+
+## 핵심 API 레퍼런스 (자주 쓰는 것)
+
+```python
+# 벤치마크 로딩
+from libero.libero import benchmark, get_libero_path
+bd = benchmark.get_benchmark_dict()
+suite = bd["libero_spatial"]()
+bddl = suite.get_task_bddl_file_path(task_id)
+
+# 환경 생성 (headless)
+from libero.libero.envs.env_wrapper import OffScreenRenderEnv
+env = OffScreenRenderEnv(bddl_file_name=bddl, camera_heights=128, camera_widths=128)
+obs = env.reset()                    # dict, 'agentview_image' key
+obs, reward, done, info = env.step(np.zeros(env.env.action_dim))
+env.close()                          # 반드시 호출
+
+# Perturbation (in-memory)
+from perturbation import BDDLParser, SwapPerturbator  # /workspace/LIBERO-PRO/perturbation.py
+parser = BDDLParser(bddl_content)
+p = SwapPerturbator(parser, "libero_ood/ood_spatial_relation.yaml")
+result = p.perturb("libero_goal", "task_name")
+```
