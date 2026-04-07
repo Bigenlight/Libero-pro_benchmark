@@ -74,40 +74,33 @@ docker pull bigenlight/libero-pro:latest
 
 ### 2. 컨테이너 실행
 
+**권장: `run.sh` 사용** (Claude Code 인증 자동 주입)
+
 ```bash
-# 기본 실행 (eval/inference)
+./run.sh                          # 기본 실행 (구독 인증 자동)
+./run.sh --api-key sk-ant-xxxx    # API 키 방식
+CUDA_VISIBLE_DEVICES=0,1 ./run.sh # GPU 선택
+```
+
+<details>
+<summary>수동 실행 (run.sh 없이)</summary>
+
+```bash
+# 기본 실행 (eval/inference, Claude Code 없이)
 docker run -it --gpus all --shm-size=16g \
   -e MUJOCO_GL=egl \
   bigenlight/libero-pro:latest bash
 ```
 
 ```bash
-# Claude Code 사용 — 구독 계정 연결 (권장)
-# 사전 준비: 현재 머신에서 `claude` 실행 후 Claude.ai 로그인 (1회)
-docker run -it --gpus all --shm-size=16g \
-  -v ~/.claude:/root/.claude \
-  -e MUJOCO_GL=egl \
-  bigenlight/libero-pro:latest bash
-```
-
-```bash
-# Claude Code 사용 — API 키 방식
+# Claude Code — API 키 방식
 docker run -it --gpus all --shm-size=16g \
   -e ANTHROPIC_API_KEY=sk-ant-xxxx \
   -e MUJOCO_GL=egl \
   bigenlight/libero-pro:latest bash
 ```
 
-```bash
-# 전체 옵션 (데이터셋 마운트 + 결과 저장 + Claude)
-docker run -it --gpus all --shm-size=16g \
-  -v ~/.claude:/root/.claude \
-  -v /path/to/datasets:/workspace/LIBERO-PRO/libero/datasets \
-  -v /path/to/results:/data/results \
-  -e MUJOCO_GL=egl \
-  -e CUDA_VISIBLE_DEVICES=0 \
-  bigenlight/libero-pro:latest bash
-```
+</details>
 
 ### 3. 컨테이너 내부 확인
 
@@ -122,8 +115,127 @@ bd = benchmark.get_benchmark_dict()
 print(list(bd.keys())[:6])
 "
 
-# Claude Code 실행
+# Claude Code 실행 (run.sh로 진입한 경우 로그인 불필요)
 claude
+```
+
+---
+
+## Docker 내부에서 Claude Code 로그인 없이 사용하기
+
+Docker 컨테이너 안에서 `claude`를 실행하면 매번 로그인을 요구한다. 이는 컨테이너가 매 실행마다 새 환경을 생성하기 때문이다. 아래 방법으로 **호스트의 인증 정보를 재사용**하여 로그인 없이 바로 사용할 수 있다.
+
+### 왜 `~/.claude` 전체를 마운트하면 안 되나?
+
+```bash
+# ❌ 이렇게 하면 안 된다
+docker run -v ~/.claude:/root/.claude ... bash
+```
+
+`~/.claude/` 디렉토리에는 자격증명 외에도 세션, 프로젝트 설정, 캐시 등 **호스트 경로에 종속된 파일**이 포함되어 있다. 이를 통째로 마운트하면:
+
+- 호스트 경로(`/home/user/project`)와 컨테이너 경로(`/workspace/LIBERO-PRO`)가 불일치
+- 세션/프로젝트 데이터 충돌로 온보딩 화면 또는 로그인 화면이 다시 뜸
+
+### 해결 원리
+
+필요한 것은 딱 **2가지**다:
+
+| 파일 | 위치 (컨테이너 내부) | 역할 |
+|------|----------------------|------|
+| `.credentials.json` | `/root/.claude/.credentials.json` | OAuth 토큰 (인증) |
+| `.claude.json` | `/root/.claude.json` | 온보딩 완료 + 프로젝트 trust 설정 |
+
+`.credentials.json`만 있으면 `claude -p` (headless)는 동작하지만, 인터랙티브 모드(`claude`)에서는 **온보딩 화면**이 먼저 뜬다. `.claude.json`에 아래 설정이 있어야 온보딩과 trust 확인을 건너뛴다:
+
+```json
+{
+  "hasCompletedOnboarding": true,
+  "theme": "dark",
+  "shiftEnterKeyBindingInstalled": true,
+  "projects": {
+    "/workspace/LIBERO-PRO": {
+      "hasTrustDialogAccepted": true,
+      "allowedTools": []
+    }
+  }
+}
+```
+
+> **주의**: `projects` 키의 경로는 **컨테이너 내부 작업 디렉토리**와 일치해야 한다.
+
+### 단계별 방법
+
+#### Step 1: 호스트에서 Claude Code 로그인 (1회)
+
+```bash
+# 호스트 터미널에서 실행
+claude
+# → 브라우저가 열리면 Claude.ai 계정으로 로그인
+# → ~/.claude/.credentials.json 에 토큰 저장됨
+```
+
+> `CLAUDE_CONFIG_DIR` 환경변수가 설정된 경우, 해당 경로에 저장된다.
+
+#### Step 2: `run.sh`로 컨테이너 실행
+
+```bash
+./run.sh
+```
+
+`run.sh`가 자동으로 수행하는 작업:
+
+1. 호스트의 `.credentials.json`을 `/tmp/.credentials.json`으로 읽기 전용 마운트
+2. 컨테이너 시작 시 `/root/.claude/`로 복사 (쓰기 가능하게)
+3. `/root/.claude.json`에 온보딩 스킵 + trust 설정 생성
+4. bash 셸 진입
+
+#### Step 3: 컨테이너 내부에서 확인
+
+```bash
+# 로그인 없이 바로 사용 가능
+claude
+```
+
+### API 키 방식 (대안)
+
+구독 계정 대신 API 키를 사용하려면:
+
+```bash
+./run.sh --api-key sk-ant-xxxx
+# 또는
+docker run -it --gpus all --shm-size=16g \
+  -e ANTHROPIC_API_KEY=sk-ant-xxxx \
+  -e MUJOCO_GL=egl \
+  bigenlight/libero-pro:latest bash
+```
+
+API 키 방식은 `.credentials.json`이나 `.claude.json` 없이도 동작한다.
+
+### Troubleshooting
+
+**여전히 로그인 화면이 뜨는 경우**
+
+```bash
+# 자격증명 파일 존재 확인
+ls -la ~/.claude/.credentials.json
+# CLAUDE_CONFIG_DIR 설정 시 해당 경로 확인
+echo $CLAUDE_CONFIG_DIR
+ls -la $CLAUDE_CONFIG_DIR/.credentials.json
+```
+
+**OAuth 토큰 만료 시**
+
+```bash
+# 호스트에서 다시 로그인
+claude
+# → 토큰이 갱신되면 다음 run.sh 실행 시 자동 반영
+```
+
+**커스텀 자격증명 경로**
+
+```bash
+CLAUDE_CREDENTIALS=/path/to/.credentials.json ./run.sh
 ```
 
 ---
