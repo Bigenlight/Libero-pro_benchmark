@@ -8,7 +8,7 @@ set -euo pipefail
 #   ./run.sh --skip-video             # 비디오 테스트 스킵
 #   ./run.sh --shell                  # 테스트 대신 bash 셸 진입
 
-IMAGE="bigenlight/libero-pro:latest"
+IMAGE="${LIBERO_IMAGE:-bigenlight/libero-pro:latest}"
 OUTPUT_DIR="$(pwd)/test_outputs"
 EXTRA_DOCKER_ARGS=""
 EXTRA_TEST_ARGS=""

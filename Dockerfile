@@ -43,6 +43,16 @@ WORKDIR /workspace/LIBERO-PRO
 RUN pip install --no-cache-dir -r requirements.txt
 RUN pip install --no-cache-dir -e .
 
+# HuggingFace LIBERO-PRO OOD bddl/init 데이터 다운로드
+RUN pip install --no-cache-dir huggingface_hub && \
+    python -c "\
+from huggingface_hub import snapshot_download; \
+snapshot_download('zhouxueyang/LIBERO-Pro', repo_type='dataset', local_dir='/tmp/libero-pro-data', \
+    allow_patterns=['bddl_files/**', 'init_files/**'])" && \
+    cp -rn /tmp/libero-pro-data/bddl_files/* /workspace/LIBERO-PRO/libero/libero/bddl_files/ && \
+    cp -rn /tmp/libero-pro-data/init_files/* /workspace/LIBERO-PRO/libero/libero/init_files/ && \
+    rm -rf /tmp/libero-pro-data /root/.cache/huggingface
+
 # ~/.libero/config.yaml 사전 생성 (없으면 import 시 interactive prompt 발생)
 RUN mkdir -p /root/.libero && cat > /root/.libero/config.yaml << 'EOF'
 benchmark_root: /workspace/LIBERO-PRO/libero/libero

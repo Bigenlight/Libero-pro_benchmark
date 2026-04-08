@@ -33,7 +33,7 @@ Libero-pro/
 
 ## 원본 코드 변경 이력
 
-> **LIBERO/, LIBERO-PRO/, Dockerfile 코드는 수정하지 않았다.**
+> **LIBERO/, LIBERO-PRO/ 코드는 수정하지 않았다.**
 > 아래는 리포 루트에서 추가/수정한 파일만 기록한다.
 
 ### 2026-04-07: 로컬 Docker 검증 환경 구축
@@ -66,7 +66,7 @@ Libero-pro/
 
 #### `test_local.py` (신규 — 389줄)
 
-컨테이너 내부(`/workspace/LIBERO-PRO`)에서 실행되는 8단계 검증 스크립트.
+컨테이너 내부(`/workspace/LIBERO-PRO`)에서 실행되는 10단계 검증 스크립트.
 
 | # | 테스트 | GPU 필요 | 검증 내용 |
 |---|--------|----------|-----------|
@@ -77,14 +77,16 @@ Libero-pro/
 | 5 | Simulation Step | O | 10 step zero action, reward/done/check_success 검증 |
 | 6 | LIBERO-PRO Loading | X | OOD benchmark suite 20개 등록 확인 |
 | 7 | Perturbation System | X | BDDLParser + 5개 perturbator in-memory 테스트 |
-| 8 | Video Rendering | O | 30 frame rollout → mp4 저장 |
+| 8 | OOD File Verification | X | 20개 OOD suite bddl/init 파일 존재 확인 |
+| 9 | OOD Env Creation | O | libero_goal_swap 환경 생성, init state 로딩, 시뮬레이션 |
+| 10 | Video Rendering | O | 30 frame rollout → mp4 저장 |
 
 설계 결정:
 - 각 env 테스트는 `contextmanager`로 `env.close()` 보장 (GPU 메모리 누수 방지)
 - 128x128 해상도 사용 (RTX 3060 12GB에서 안전)
 - `signal.SIGALRM` 기반 120초 timeout (env.reset()의 RandomizationError 무한루프 방지)
 - Perturbation 테스트는 디스크 쓰기 없이 in-memory만 (process_bddl_file_mixed 호출 안 함)
-- OOD suite는 bddl/init 파일이 없으므로 클래스 로딩만 확인 (env 생성 안 함)
+- OOD suite bddl/init 파일은 이미지 빌드 시 HuggingFace에서 내장됨 (v1.1부터)
 
 #### `CLAUDE.md` (신규 — 이 파일)
 
@@ -92,12 +94,27 @@ Libero-pro/
 
 ---
 
+### 2026-04-08: LIBERO-PRO OOD 데이터 이미지 내장 + 테스트 확장
+
+#### `Dockerfile` (수정)
+- HuggingFace `zhouxueyang/LIBERO-Pro`에서 OOD bddl/init 파일 다운로드 단계 추가
+- `allow_patterns`로 bddl_files, init_files만 선별 다운로드 (demo HDF5 제외)
+- 이미지 크기 최소화를 위해 HF 캐시 삭제
+
+#### `test_local.py` (수정 — 8단계 → 10단계)
+- Test 8: OOD bddl/init 파일 존재 검증 (CPU, 20개 suite)
+- Test 9: OOD 환경 생성 + Simulation Step (GPU, libero_goal_swap)
+- 기존 Test 8 (Video) → Test 10으로 변경
+
+---
+
 ## Docker 이미지 정보
 
-- **이미지**: `bigenlight/libero-pro:latest` (= `v1.0`)
-- **크기**: ~23GB
+- **이미지**: `bigenlight/libero-pro:latest` (= `v1.1`)
+- **크기**: ~25GB (OOD 데이터 포함)
 - **WORKDIR**: `/workspace/LIBERO-PRO`
 - **렌더링**: `MUJOCO_GL=egl` (기본), `osmesa` (fallback)
+- **HuggingFace `zhouxueyang/LIBERO-Pro` bddl/init 데이터 내장**
 - **버그 3개 패치 완료** (이미지 빌드 시 적용):
   1. `ood_object.yaml` line 39 빈 키 → `wooden_cabinet:` 
   2. `perturbation.py` line 658 `seed=int` → `seed=42`
@@ -110,7 +127,9 @@ Libero-pro/
 
 - [x] Docker 이미지 빌드/푸시/검증 완료
 - [x] 로컬 검증 스크립트 작성 완료 (`run.sh` + `test_local.py`)
-- [x] 로컬에서 `./run.sh` 실행 — **8/8 PASS** (EGL, RTX 3060 12GB, 2026-04-07)
+- [x] 로컬에서 `./run.sh` 실행 — **10/10 PASS** (EGL, RTX 3060 12GB, v1.1, 2026-04-08)
+- [x] LIBERO-PRO OOD 데이터 이미지 내장 (v1.1)
+- [x] OOD 환경 테스트 추가 (test 8, 9)
 - [ ] 원격 서버(aadd, RTX A6000 x4)에서 eval 검증
 - [ ] train 이미지 빌드 (데이터셋 포함)
 - [ ] bc_transformer baseline 학습
@@ -125,7 +144,7 @@ Libero-pro/
 | `use_task` 언어 지시 버그 (#14) | 미해결 | VLA 통합 시 workaround 필요 |
 | OpenVLA 결과 불일치 (#20) | 미확인 | 평가 전 확인 필요 |
 | Environment BDDL 미출시 (#9) | 업스트림 대기 | `ood_environment.yaml`은 있으나 데이터 미완 |
-| OOD suite init_states 미생성 | 정상 | HuggingFace에서 다운로드 또는 generate_init_states.py 실행 필요 |
+| OOD suite init_states | 해결 (v1.1) | HuggingFace 데이터 이미지 내장으로 자동 포함 |
 
 ---
 

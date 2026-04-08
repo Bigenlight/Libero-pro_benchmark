@@ -2,7 +2,7 @@
 """LIBERO / LIBERO-PRO Docker 로컬 검증 스크립트.
 
 컨테이너 내부(/workspace/LIBERO-PRO)에서 실행.
-8단계 테스트를 통해 벤치마크 환경이 정상 동작하는지 확인한다.
+10단계 테스트를 통해 벤치마크 환경이 정상 동작하는지 확인한다.
 """
 
 import sys
@@ -311,7 +311,96 @@ def test_perturbation(args):
         print(f"  {name}: returned str (len={len(result)}), changed={changed}")
 
 # ═══════════════════════════════════════════════════════════════
-# TEST 8: Video Rendering (optional)
+# TEST 8: OOD bddl/init 파일 검증 (CPU only)
+# ═══════════════════════════════════════════════════════════════
+
+# ood_environment 계열은 데이터 미완 (known issue) → 스킵
+OOD_ENV_SKIP = {
+    "libero_goal_env", "libero_spatial_env",
+    "libero_object_env", "libero_10_env",
+}
+
+def test_ood_files(args):
+    from libero.libero import benchmark
+    bd = benchmark.get_benchmark_dict()
+
+    checked = 0
+    skipped = 0
+    for name in OOD_SUITES:
+        if name in OOD_ENV_SKIP:
+            print(f"  {name}: SKIP (ood_environment data incomplete)")
+            skipped += 1
+            continue
+        if name not in bd:
+            print(f"  {name}: not registered, SKIP")
+            skipped += 1
+            continue
+
+        suite = bd[name]()
+        # bddl 파일 확인 (task 0)
+        bddl_path = suite.get_task_bddl_file_path(0)
+        assert os.path.exists(bddl_path), f"{name} task 0 bddl missing: {bddl_path}"
+
+        # init_states 파일 확인
+        try:
+            init_states = suite.get_task_init_states(0)
+            assert init_states is not None, f"{name} task 0 init_states is None"
+            assert len(init_states) > 0, f"{name} task 0 init_states is empty"
+            print(f"  {name}: bddl ✓, init_states ({len(init_states)} states) ✓")
+        except FileNotFoundError as e:
+            print(f"  {name}: bddl ✓, init_states MISSING ({e})")
+            raise
+
+        checked += 1
+
+    print(f"  Checked: {checked}, Skipped: {skipped}")
+    assert checked > 0, "No OOD suites were checked!"
+
+# ═══════════════════════════════════════════════════════════════
+# TEST 9: OOD 환경 생성 + Step (GPU)
+# ═══════════════════════════════════════════════════════════════
+
+def test_ood_env_step(args):
+    from libero.libero import benchmark
+    bd = benchmark.get_benchmark_dict()
+
+    suite_name = "libero_goal_swap"
+    assert suite_name in bd, f"{suite_name} not registered!"
+    suite = bd[suite_name]()
+    bddl_path = suite.get_task_bddl_file_path(0)
+    task_name = suite.get_task_names()[0]
+    print(f"  Suite: {suite_name}")
+    print(f"  Task: {task_name}")
+    print(f"  BDDL: {bddl_path}")
+
+    # init_states 로드
+    init_states = suite.get_task_init_states(0)
+    print(f"  init_states: {len(init_states)} states, shape={init_states[0].shape}")
+
+    with timeout(120, "OOD env creation + step timed out (120s)"):
+        with make_env(bddl_path) as env:
+            # set_init_state로 초기 상태 설정
+            obs = env.set_init_state(init_states[0])
+            print(f"  set_init_state OK")
+
+            obs = env.reset()
+            assert isinstance(obs, dict), f"obs is {type(obs)}, expected dict"
+            assert "agentview_image" in obs
+            img = obs["agentview_image"]
+            assert img.shape == (128, 128, 3), f"Image shape: {img.shape}"
+            print(f"  Env reset OK, obs keys: {list(obs.keys())}")
+
+            # 5 step zero action
+            action_dim = env.env.action_dim
+            for i in range(5):
+                obs, reward, done, info = env.step(np.zeros(action_dim))
+                assert isinstance(obs, dict)
+                assert "agentview_image" in obs
+
+            print(f"  5 steps OK, last reward={reward}, done={done}")
+
+# ═══════════════════════════════════════════════════════════════
+# TEST 10: Video Rendering (optional)
 # ═══════════════════════════════════════════════════════════════
 
 def test_video_rendering(args):
@@ -363,23 +452,25 @@ def main():
 
     os.makedirs(args.output_dir, exist_ok=True)
 
-    # CPU-only tests (1, 2, 6, 7) — 이것들은 GPU 실패와 무관하게 돌아감
+    # CPU-only tests (1, 2) — 이것들은 GPU 실패와 무관하게 돌아감
     run_test("1. Basic Environment", test_basic_env, args)
     run_test("2. LIBERO Benchmark Loading", test_benchmark_loading, args)
 
-    # GPU tests (3, 4, 5, 8)
+    # GPU tests (3, 4, 5)
     run_test("3. Env Creation + Reset", test_env_creation, args)
     run_test("4. Rendering (PNG)", test_rendering, args)
     run_test("5. Simulation Step", test_simulation_step, args)
 
-    # LIBERO-PRO tests (6, 7) — CPU only
+    # LIBERO-PRO tests (6, 7, 8, 9)
     if not args.skip_pro:
         run_test("6. LIBERO-PRO Loading", test_libero_pro_loading, args)
         run_test("7. Perturbation System", test_perturbation, args)
+        run_test("8. OOD bddl/init Files", test_ood_files, args)
+        run_test("9. OOD Env Creation + Step", test_ood_env_step, args)
 
     # Video (GPU, optional)
     if not args.skip_video:
-        run_test("8. Video Rendering", test_video_rendering, args)
+        run_test("10. Video Rendering", test_video_rendering, args)
 
     print_summary()
 

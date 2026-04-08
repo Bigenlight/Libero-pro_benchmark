@@ -51,7 +51,8 @@ docker run --rm --gpus all nvidia/cuda:11.3.1-base-ubuntu20.04 nvidia-smi
 
 | 태그 | 내용 | 크기 |
 |------|------|------|
-| `v1.0` = `latest` | Base 환경 (eval/inference용) | ~23GB |
+| `v1.1` = `latest` | Base 환경 + OOD bddl/init 데이터 | ~25GB |
+| `v1.0` | Base 환경 (eval/inference용, OOD 데이터 없음) | ~23GB |
 | `train` | Base + 학습 데이터셋 포함 (예정) | ~60GB+ |
 
 ### 이미지 구성
@@ -242,25 +243,34 @@ CLAUDE_CREDENTIALS=/path/to/.credentials.json ./run.sh
 
 ## 데이터셋 준비
 
-학습(train) 또는 init_states가 필요한 평가를 위해 다음 데이터를 다운로드한다.
+### OOD bddl/init 데이터 (v1.1 이미지 사용 시 불필요)
+
+`v1.1` = `latest` 이미지에는 HuggingFace `zhouxueyang/LIBERO-Pro`의 bddl/init 파일이 이미 내장되어 있다. 별도 다운로드 없이 OOD 평가 환경을 바로 생성할 수 있다.
+
+`v1.0` 이미지를 사용하거나 호스트에서 직접 데이터가 필요한 경우에만 아래 절차를 따른다.
 
 ```bash
-# 컨테이너 내부 또는 호스트에서 실행
+# v1.0 이미지 또는 호스트에서 필요할 때만 실행
 pip install huggingface_hub
 
-# LIBERO-PRO bddl/init 파일 (OOD 평가용)
+# LIBERO-PRO bddl/init 파일 (OOD 평가용, bddl/init만 선별 다운로드)
 python -c "
 from huggingface_hub import snapshot_download
 snapshot_download(
     'zhouxueyang/LIBERO-Pro',
     repo_type='dataset',
-    local_dir='/tmp/libero-pro-data'
+    local_dir='/tmp/libero-pro-data',
+    allow_patterns=['bddl_files/*', 'init_files/*']
 )
 "
 cp -r /tmp/libero-pro-data/bddl_files/* /workspace/LIBERO-PRO/libero/libero/bddl_files/
 cp -r /tmp/libero-pro-data/init_files/*  /workspace/LIBERO-PRO/libero/libero/init_files/
+```
 
-# 학습 데모 데이터 (bc_transformer baseline 학습용)
+### 학습 데모 데이터 (bc_transformer baseline 학습용)
+
+```bash
+# 컨테이너 내부에서 실행
 cd /workspace/LIBERO-PRO
 python benchmark_scripts/download_libero_datasets.py --datasets all --use-huggingface
 ```
@@ -302,6 +312,7 @@ python benchmark_scripts/download_libero_datasets.py --datasets all --use-huggin
 - [x] Docker Hub 푸시 완료
 - [x] 버그 픽스 3개 적용
 - [x] 컨테이너 검증 완료 (패키지, 벤치마크, Claude Code)
+- [x] OOD bddl/init 데이터 이미지 내장 (`v1.1`)
 - [ ] 원격 서버에서 eval 검증
 - [ ] `train` 태그 이미지 (데이터셋 포함) 빌드
 - [ ] bc_transformer_policy baseline 학습
