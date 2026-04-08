@@ -20,7 +20,10 @@ Libero-pro/
 ├── LIBERO_PRO_PLAN.md     # 실험 상세 계획서
 ├── Dockerfile             # Docker 이미지 빌드 (CUDA 11.3 + robosuite + Claude Code)
 ├── run.sh                 # Docker 컨테이너 실행 스크립트
-├── test_local.py          # 컨테이너 내부 8단계 검증 스크립트
+├── test_local.py          # 컨테이너 내부 10단계 검증 스크립트
+├── record_pro_video.py    # LIBERO-PRO OOD 환경 영상 녹화 스크립트
+├── record_comparison.py   # 원본 LIBERO vs OOD 비교 영상 녹화 스크립트
+├── .gitignore             # test_outputs/ 제외
 ├── LIBERO/                # 원본 LIBERO 벤치마크 (git submodule, 수정 없음)
 └── LIBERO-PRO/            # LIBERO-PRO 확장 코드 (수정 없음)
     ├── perturbation.py        # OOD perturbation 엔진 (5종)
@@ -33,12 +36,12 @@ Libero-pro/
 
 ## 원본 코드 변경 이력
 
-> **LIBERO/, LIBERO-PRO/ 코드는 수정하지 않았다.**
+> **LIBERO/, LIBERO-PRO/ 코드는 수정하지 않았다. Dockerfile은 2026-04-08에 수정.**
 > 아래는 리포 루트에서 추가/수정한 파일만 기록한다.
 
 ### 2026-04-07: 로컬 Docker 검증 환경 구축
 
-#### `run.sh` (수정 — 기존 빈 파일 0 bytes → 174줄)
+#### `run.sh` (수정 — 기존 빈 파일 0 bytes → 177줄)
 
 원래 빈 파일이었던 `run.sh`를 Docker 컨테이너 실행 스크립트로 재작성했다.
 
@@ -64,7 +67,7 @@ Libero-pro/
 ./run.sh --shell                  # bash 셸 진입
 ```
 
-#### `test_local.py` (신규 — 389줄)
+#### `test_local.py` (신규 — 481줄)
 
 컨테이너 내부(`/workspace/LIBERO-PRO`)에서 실행되는 10단계 검증 스크립트.
 
@@ -88,6 +91,16 @@ Libero-pro/
 - Perturbation 테스트는 디스크 쓰기 없이 in-memory만 (process_bddl_file_mixed 호출 안 함)
 - OOD suite bddl/init 파일은 이미지 빌드 시 HuggingFace에서 내장됨 (v1.1부터)
 
+#### 코드 리뷰에서 발견/수정한 버그
+
+| 버그 | 위치 | 수정 |
+|------|------|------|
+| `total_mem` AttributeError | `test_local.py` | PyTorch 속성명은 `total_memory` → 수정 |
+| 빌트인 `TimeoutError` 섀도잉 | `test_local.py` | `TestTimeoutError`로 커스텀 클래스명 변경 |
+| bddl/init 디렉토리 assert 누락 | `test_local.py` | `os.path.isdir()` assert 추가 |
+| `obs` 참조가 env.close() 이후 | `test_local.py` | `with` 블록 안으로 이동 |
+| API key 이중 주입 | `run.sh` | `--api-key` 플래그 우선, 환경변수 중복 시 스킵 |
+
 #### `CLAUDE.md` (신규 — 이 파일)
 
 프로젝트 컨텍스트와 변경 이력을 기록하여 다음 대화에서 자동으로 읽히도록 함.
@@ -100,6 +113,22 @@ Libero-pro/
 - HuggingFace `zhouxueyang/LIBERO-Pro`에서 OOD bddl/init 파일 다운로드 단계 추가
 - `allow_patterns`로 bddl_files, init_files만 선별 다운로드 (demo HDF5 제외)
 - 이미지 크기 최소화를 위해 HF 캐시 삭제
+- `cp -rn` (no-clobber)으로 기존 LIBERO 원본 bddl 파일 덮어쓰기 방지
+
+#### `run.sh` (수정)
+- `IMAGE` 변수를 `LIBERO_IMAGE` 환경변수로 오버라이드 가능하게 변경
+  - `LIBERO_IMAGE=bigenlight/libero-pro:v1.0 ./run.sh` 형태로 이미지 버전 전환 가능
+
+#### `record_pro_video.py` (신규)
+- LIBERO-PRO OOD 환경에서 256x256 해상도 영상 녹화
+- 4개 OOD suite (goal_swap, spatial_object, goal_lan, 10_swap) 자동 녹화
+
+#### `record_comparison.py` (신규)
+- 원본 LIBERO vs OOD 동일 task 비교 영상 3쌍 녹화
+- 같은 random seed로 로봇 동작 동일, 환경 차이만 비교 가능
+
+#### `.gitignore` (신규)
+- `test_outputs/` 디렉토리 제외 (생성된 PNG/MP4 산출물)
 
 #### `test_local.py` (수정 — 8단계 → 10단계)
 - Test 8: OOD bddl/init 파일 존재 검증 (CPU, 20개 suite)
@@ -145,6 +174,28 @@ Libero-pro/
 | OpenVLA 결과 불일치 (#20) | 미확인 | 평가 전 확인 필요 |
 | Environment BDDL 미출시 (#9) | 업스트림 대기 | `ood_environment.yaml`은 있으나 데이터 미완 |
 | OOD suite init_states | 해결 (v1.1) | HuggingFace 데이터 이미지 내장으로 자동 포함 |
+
+---
+
+## 개발 워크플로우 (서버 작업 시)
+
+> 2026-04-08 논의 후 결정된 워크플로우.
+
+**원칙: 컨테이너는 일회용 실행환경, 코드/데이터/결과는 호스트에.**
+
+- **docker commit 사용 금지** — 레이어 누적으로 스토리지 폭발, 재현 불가
+- **bind mount** — 서버의 git repo를 컨테이너에 마운트하여 코드 편집 즉시 반영
+- **환경 변경은 Dockerfile에 기록** — pip install 추가 시 Dockerfile 수정 후 재빌드
+- **named container** — `--rm` 없이 컨테이너 유지, `docker exec`로 재진입
+- **tmux** — SSH 세션 영속화, 실험 돌리는 중에 detach 가능
+
+```bash
+# 서버에서의 일상 워크플로우
+ssh server
+tmux attach -t libero
+docker exec -it libero-pro bash    # 기존 컨테이너 재진입
+# 코드 편집 → 실험 → git commit (호스트에서)
+```
 
 ---
 

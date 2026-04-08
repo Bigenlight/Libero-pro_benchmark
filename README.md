@@ -80,7 +80,11 @@ docker pull bigenlight/libero-pro:latest
 ```bash
 ./run.sh                          # 기본 실행 (구독 인증 자동)
 ./run.sh --api-key sk-ant-xxxx    # API 키 방식
+./run.sh --skip-video             # 비디오 테스트 스킵
+./run.sh --skip-pro               # LIBERO-PRO 테스트 스킵
+./run.sh --shell                  # bash 셸 진입 (테스트 대신)
 CUDA_VISIBLE_DEVICES=0,1 ./run.sh # GPU 선택
+LIBERO_IMAGE=bigenlight/libero-pro:v1.0 ./run.sh  # 이미지 버전 지정
 ```
 
 <details>
@@ -88,14 +92,14 @@ CUDA_VISIBLE_DEVICES=0,1 ./run.sh # GPU 선택
 
 ```bash
 # 기본 실행 (eval/inference, Claude Code 없이)
-docker run -it --gpus all --shm-size=16g \
+docker run -it --gpus all --shm-size=8g \
   -e MUJOCO_GL=egl \
   bigenlight/libero-pro:latest bash
 ```
 
 ```bash
 # Claude Code — API 키 방식
-docker run -it --gpus all --shm-size=16g \
+docker run -it --gpus all --shm-size=8g \
   -e ANTHROPIC_API_KEY=sk-ant-xxxx \
   -e MUJOCO_GL=egl \
   bigenlight/libero-pro:latest bash
@@ -205,7 +209,7 @@ claude
 ```bash
 ./run.sh --api-key sk-ant-xxxx
 # 또는
-docker run -it --gpus all --shm-size=16g \
+docker run -it --gpus all --shm-size=8g \
   -e ANTHROPIC_API_KEY=sk-ant-xxxx \
   -e MUJOCO_GL=egl \
   bigenlight/libero-pro:latest bash
@@ -308,15 +312,40 @@ python benchmark_scripts/download_libero_datasets.py --datasets all --use-huggin
 
 ## 현재 상태
 
-- [x] Docker 이미지 빌드 완료 (`bigenlight/libero-pro:v1.0`)
+- [x] Docker 이미지 빌드 완료 (v1.0 → v1.1, OOD 데이터 포함)
 - [x] Docker Hub 푸시 완료
 - [x] 버그 픽스 3개 적용
 - [x] 컨테이너 검증 완료 (패키지, 벤치마크, Claude Code)
 - [x] OOD bddl/init 데이터 이미지 내장 (`v1.1`)
+- [x] 로컬 검증 10/10 PASS (RTX 3060 12GB, EGL, v1.1, 2026-04-08)
 - [ ] 원격 서버에서 eval 검증
 - [ ] `train` 태그 이미지 (데이터셋 포함) 빌드
 - [ ] bc_transformer_policy baseline 학습
 - [ ] VLA 모델 LIBERO-PRO 평가
+
+---
+
+## 비디오 녹화 (시각화)
+
+LIBERO/LIBERO-PRO 환경을 영상으로 녹화할 수 있다.
+
+```bash
+# LIBERO-PRO OOD 환경 녹화 (4종)
+docker run --rm --gpus all --shm-size=8g \
+  -e MUJOCO_GL=egl \
+  -v $(pwd)/record_pro_video.py:/workspace/LIBERO-PRO/record_pro_video.py:ro \
+  -v $(pwd)/test_outputs:/workspace/LIBERO-PRO/test_outputs \
+  bigenlight/libero-pro:latest python record_pro_video.py
+
+# 원본 vs OOD 비교 영상 (3쌍)
+docker run --rm --gpus all --shm-size=8g \
+  -e MUJOCO_GL=egl \
+  -v $(pwd)/record_comparison.py:/workspace/LIBERO-PRO/record_comparison.py:ro \
+  -v $(pwd)/test_outputs:/workspace/LIBERO-PRO/test_outputs \
+  bigenlight/libero-pro:latest python record_comparison.py
+```
+
+출력물은 `test_outputs/` 디렉토리에 저장된다.
 
 ---
 
@@ -392,6 +421,8 @@ done
 # 해결: osmesa fallback
 docker run ... -e MUJOCO_GL=osmesa ...
 ```
+
+> `run.sh` 사용 시 EGL 실패하면 자동으로 OSMesa로 fallback된다.
 
 **`--gpus all` 미동작**
 ```bash
