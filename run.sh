@@ -14,8 +14,31 @@ OOD_DATA_DIR="$(pwd)/ood_data"
 EXTRA_DOCKER_ARGS=""
 EXTRA_TEST_ARGS=""
 SHELL_MODE=false
+VLA_EVAL_MODE=false
+VLA_EVAL_SUITE="libero_spatial"
+VLA_URL="${VLA_SERVER_URL:-http://localhost:8400}"
+VLA_NUM_TASKS=2
+VLA_NUM_TRIALS=1
 
 # ── 인자 파싱 ────────────────────────────────────────────
+
+usage() {
+    cat <<USAGE
+Usage:
+  ./run.sh                          # default: run test_local.py (EGL → osmesa fallback)
+  ./run.sh --shell                  # interactive bash shell inside the container
+  ./run.sh --skip-video             # skip video test
+  ./run.sh --skip-pro               # skip LIBERO-PRO OOD tests
+
+VLA eval mode:
+  ./run.sh --vla-eval <suite> [--vla-url http://host:port] [--vla-num-tasks N] [--vla-num-trials N]
+    example: ./run.sh --vla-eval libero_spatial --vla-url http://localhost:8400
+    example: ./run.sh --vla-eval libero_goal_swap --vla-num-tasks 2
+
+In VLA eval mode the container uses --network host so it can reach the VLA
+model server on localhost.
+USAGE
+}
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -31,8 +54,24 @@ while [[ $# -gt 0 ]]; do
         --shell)
             SHELL_MODE=true
             shift ;;
+        --vla-eval)
+            VLA_EVAL_MODE=true
+            VLA_EVAL_SUITE="$2"
+            shift 2 ;;
+        --vla-url)
+            VLA_URL="$2"
+            shift 2 ;;
+        --vla-num-tasks)
+            VLA_NUM_TASKS="$2"
+            shift 2 ;;
+        --vla-num-trials)
+            VLA_NUM_TRIALS="$2"
+            shift 2 ;;
+        -h|--help)
+            usage; exit 0 ;;
         *)
             echo "Unknown option: $1"
+            usage
             exit 1 ;;
     esac
 done
@@ -146,6 +185,42 @@ fi
 
 echo ""
 echo "=== Starting container ==="
+
+# ── VLA eval mode ────────────────────────────────────────
+if $VLA_EVAL_MODE; then
+    echo "  Mode: VLA eval (suite=$VLA_EVAL_SUITE, url=$VLA_URL)"
+    echo ""
+
+    # Bring the benchmark container onto host network so it can hit
+    # localhost:8400 where the openpi-pi05-http server is listening.
+    docker run --rm --gpus all --shm-size=8g --network host \
+        -e MUJOCO_GL=egl \
+        -e VLA_SERVER_URL="$VLA_URL" \
+        $OOD_MOUNT \
+        $EXTRA_DOCKER_ARGS \
+        -v "$(pwd)/scripts:/workspace/LIBERO-PRO/scripts:ro" \
+        -v "$OUTPUT_DIR:/workspace/LIBERO-PRO/test_outputs" \
+        "$IMAGE" \
+        bash -c "$ENTRYPOINT_CMD
+pip install --quiet requests imageio imageio-ffmpeg >/dev/null 2>&1 || true
+python scripts/libero_vla_eval.py \
+    --vla-url \"$VLA_URL\" \
+    --suite \"$VLA_EVAL_SUITE\" \
+    --num-tasks $VLA_NUM_TASKS \
+    --num-trials $VLA_NUM_TRIALS \
+    --output-dir /workspace/LIBERO-PRO/test_outputs/eval"
+    rc=$?
+    if [[ $rc -eq 0 ]]; then
+        echo ""
+        echo "=== VLA EVAL COMPLETED (suite=$VLA_EVAL_SUITE) ==="
+        echo "Results: $OUTPUT_DIR/eval/"
+    else
+        echo ""
+        echo "=== VLA EVAL FAILED (exit $rc) ==="
+        exit $rc
+    fi
+    exit 0
+fi
 
 if $SHELL_MODE; then
     echo "  Mode: interactive shell"
