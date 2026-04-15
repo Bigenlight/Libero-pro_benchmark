@@ -322,7 +322,7 @@ python benchmark_scripts/download_libero_datasets.py --datasets all --use-huggin
 - [x] OOD 데이터 repo 편입 (`ood_data/`) + 마운트 워크플로우 (`v1.2`, 2026-04-15)
 - [x] 로컬 검증 10/10 PASS (RTX 3060 12GB, EGL, v1.1→v1.2, 2026-04-08/15)
 - [x] 원격 서버(aadd, RTX A6000 × 4) eval 환경 검증 — 10/10 PASS (v1.1, 2026-04-15)
-- [ ] 원격 서버에서 v1.2 재검증
+- [x] 원격 서버에서 v1.2 재검증 — 10/10 PASS (2026-04-15)
 - [ ] `train` 태그 이미지 (데이터셋 포함) 빌드
 - [ ] bc_transformer_policy baseline 학습
 - [ ] VLA 모델 LIBERO-PRO 평가
