@@ -51,9 +51,15 @@ docker run --rm --gpus all nvidia/cuda:11.3.1-base-ubuntu20.04 nvidia-smi
 
 | 태그 | 내용 | 크기 |
 |------|------|------|
-| `v1.1` = `latest` | Base 환경 + OOD bddl/init 데이터 | ~25GB |
-| `v1.0` | Base 환경 (eval/inference용, OOD 데이터 없음) | ~23GB |
+| `v1.2` = `latest` | Base 환경 (OOD 데이터는 `ood_data/` 에서 런타임 마운트) | ~23GB |
+| `v1.1` | Base 환경 + OOD bddl/init 데이터 내장 (HF 다운로드) | ~25GB |
+| `v1.0` | Base 환경 (OOD 데이터 없음) | ~23GB |
 | `train` | Base + 학습 데이터셋 포함 (예정) | ~60GB+ |
+
+> **v1.2 변경**: OOD bddl/init 데이터(~2MB)가 이 리포의 `ood_data/` 디렉토리로 이동했다.
+> `run.sh` 가 자동으로 `ood_data/` 를 컨테이너에 마운트해서 `/workspace/LIBERO-PRO` 의
+> bddl_files / init_files 로 병합한다. HuggingFace 런타임 의존성이 없어졌고, OOD 데이터
+> 소스가 이미지와 분리되어 **코드 수정 → 즉시 반영** 워크플로우가 가능해졌다.
 
 ### 이미지 구성
 
@@ -247,29 +253,25 @@ CLAUDE_CREDENTIALS=/path/to/.credentials.json ./run.sh
 
 ## 데이터셋 준비
 
-### OOD bddl/init 데이터 (v1.1 이미지 사용 시 불필요)
+### OOD bddl/init 데이터 (v1.2 부터: `ood_data/` 자동 마운트)
 
-`v1.1` = `latest` 이미지에는 HuggingFace `zhouxueyang/LIBERO-Pro`의 bddl/init 파일이 이미 내장되어 있다. 별도 다운로드 없이 OOD 평가 환경을 바로 생성할 수 있다.
+`v1.2` = `latest` 부터는 **OOD bddl/init 파일이 이 리포의 `ood_data/` 에 커밋**되어 있다.
+`run.sh` 가 컨테이너 시작 시 자동으로 마운트 + 병합하므로 별도 절차가 필요 없다.
 
-`v1.0` 이미지를 사용하거나 호스트에서 직접 데이터가 필요한 경우에만 아래 절차를 따른다.
-
-```bash
-# v1.0 이미지 또는 호스트에서 필요할 때만 실행
-pip install huggingface_hub
-
-# LIBERO-PRO bddl/init 파일 (OOD 평가용, bddl/init만 선별 다운로드)
-python -c "
-from huggingface_hub import snapshot_download
-snapshot_download(
-    'zhouxueyang/LIBERO-Pro',
-    repo_type='dataset',
-    local_dir='/tmp/libero-pro-data',
-    allow_patterns=['bddl_files/*', 'init_files/*']
-)
-"
-cp -r /tmp/libero-pro-data/bddl_files/* /workspace/LIBERO-PRO/libero/libero/bddl_files/
-cp -r /tmp/libero-pro-data/init_files/*  /workspace/LIBERO-PRO/libero/libero/init_files/
 ```
+ood_data/
+├── bddl_files/   # 16 OOD suites × 10 tasks (swap / object / lan / task)
+└── init_files/   # torch.save 형식 init states (각 task 당 50 states)
+```
+
+`run.sh` 동작:
+1. 호스트 `ood_data/` → 컨테이너 `/tmp/ood_data:ro` 마운트
+2. 컨테이너 진입 직후 `cp -rn /tmp/ood_data/bddl_files/*` 를
+   `/workspace/LIBERO-PRO/libero/libero/bddl_files/` 로 병합 (`-n` no-clobber)
+3. `init_files` 동일하게 병합
+
+> 직접 `docker run` 으로 이미지를 쓸 경우 OOD 파일이 없으니, 테스트를 돌리려면 반드시
+> `run.sh` 를 사용하거나 같은 마운트 규칙을 직접 지정해야 한다.
 
 ### 학습 데모 데이터 (bc_transformer baseline 학습용)
 
@@ -312,13 +314,15 @@ python benchmark_scripts/download_libero_datasets.py --datasets all --use-huggin
 
 ## 현재 상태
 
-- [x] Docker 이미지 빌드 완료 (v1.0 → v1.1, OOD 데이터 포함)
+- [x] Docker 이미지 빌드 완료 (v1.0 → v1.1 → v1.2)
 - [x] Docker Hub 푸시 완료
 - [x] 버그 픽스 3개 적용
 - [x] 컨테이너 검증 완료 (패키지, 벤치마크, Claude Code)
 - [x] OOD bddl/init 데이터 이미지 내장 (`v1.1`)
-- [x] 로컬 검증 10/10 PASS (RTX 3060 12GB, EGL, v1.1, 2026-04-08)
-- [ ] 원격 서버에서 eval 검증
+- [x] OOD 데이터 repo 편입 (`ood_data/`) + 마운트 워크플로우 (`v1.2`, 2026-04-15)
+- [x] 로컬 검증 10/10 PASS (RTX 3060 12GB, EGL, v1.1→v1.2, 2026-04-08/15)
+- [x] 원격 서버(aadd, RTX A6000 × 4) eval 환경 검증 — 10/10 PASS (v1.1, 2026-04-15)
+- [ ] 원격 서버에서 v1.2 재검증
 - [ ] `train` 태그 이미지 (데이터셋 포함) 빌드
 - [ ] bc_transformer_policy baseline 학습
 - [ ] VLA 모델 LIBERO-PRO 평가
