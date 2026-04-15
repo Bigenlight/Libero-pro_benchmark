@@ -67,6 +67,8 @@ class EvalConfig:
     seed: int = 7
     max_steps_override: Optional[int] = None
     save_video: bool = True
+    task_ids: Optional[List[int]] = None  # explicit task ids; overrides num_tasks
+    shard_tag: str = ""                    # appended to run dir; useful for parallel shards
 
 
 @dataclass
@@ -178,7 +180,8 @@ def run_eval(cfg: EvalConfig) -> dict:
     from libero.libero.envs import OffScreenRenderEnv
 
     os.makedirs(cfg.output_dir, exist_ok=True)
-    run_tag = f"{cfg.suite}_{time.strftime('%Y%m%d_%H%M%S')}"
+    shard_suffix = f"_{cfg.shard_tag}" if cfg.shard_tag else ""
+    run_tag = f"{cfg.suite}_{time.strftime('%Y%m%d_%H%M%S')}{shard_suffix}"
     run_dir = pathlib.Path(cfg.output_dir) / run_tag
     video_dir = run_dir / "videos"
     if cfg.save_video:
@@ -203,8 +206,19 @@ def run_eval(cfg: EvalConfig) -> dict:
         )
     suite = bd[cfg.suite]()
     n_suite = suite.n_tasks
-    n_tasks = min(cfg.num_tasks, n_suite) if cfg.num_tasks > 0 else n_suite
-    logger.info("Suite %s: running %d / %d tasks", cfg.suite, n_tasks, n_suite)
+    if cfg.task_ids:
+        task_id_list = [t for t in cfg.task_ids if 0 <= t < n_suite]
+        if not task_id_list:
+            raise ValueError(f"No valid task ids in {cfg.task_ids} for suite of {n_suite} tasks")
+    else:
+        n_tasks = min(cfg.num_tasks, n_suite) if cfg.num_tasks > 0 else n_suite
+        task_id_list = list(range(n_tasks))
+    logger.info(
+        "Suite %s: running task ids %s (out of %d)",
+        cfg.suite,
+        task_id_list,
+        n_suite,
+    )
 
     # max_steps: either user override, or the longest demo rule, or fallback 300.
     max_steps = cfg.max_steps_override
@@ -221,7 +235,7 @@ def run_eval(cfg: EvalConfig) -> dict:
     total_successes = 0
 
     # --- Task loop -------------------------------------------------------- #
-    for task_id in range(n_tasks):
+    for task_id in task_id_list:
         task = suite.get_task(task_id)
         bddl_path = str(
             pathlib.Path(get_libero_path("bddl_files")) / task.problem_folder / task.bddl_file
@@ -304,7 +318,8 @@ def run_eval(cfg: EvalConfig) -> dict:
         "suite": cfg.suite,
         "vla_url": cfg.vla_url,
         "server_info": server_info,
-        "num_tasks": n_tasks,
+        "num_tasks": len(task_id_list),
+        "task_ids": task_id_list,
         "num_trials_per_task": cfg.num_trials,
         "total_episodes": total_episodes,
         "total_successes": total_successes,
@@ -354,7 +369,21 @@ def main():
     p.add_argument("--seed", type=int, default=7)
     p.add_argument("--max-steps", type=int, default=None, dest="max_steps_override")
     p.add_argument("--no-video", action="store_true")
+    p.add_argument(
+        "--task-ids",
+        default="",
+        help="comma-separated explicit task ids, e.g. '0,1,2,3'. Overrides --num-tasks.",
+    )
+    p.add_argument(
+        "--shard-tag",
+        default="",
+        help="appended to the run directory name — use per-shard for parallel runs.",
+    )
     args = p.parse_args()
+
+    task_ids = None
+    if args.task_ids.strip():
+        task_ids = [int(x) for x in args.task_ids.split(",") if x.strip()]
 
     cfg = EvalConfig(
         vla_url=args.vla_url,
@@ -368,6 +397,8 @@ def main():
         seed=args.seed,
         max_steps_override=args.max_steps_override,
         save_video=not args.no_video,
+        task_ids=task_ids,
+        shard_tag=args.shard_tag,
     )
     run_eval(cfg)
 
