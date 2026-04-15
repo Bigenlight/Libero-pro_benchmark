@@ -10,6 +10,7 @@ set -euo pipefail
 
 IMAGE="${LIBERO_IMAGE:-bigenlight/libero-pro:latest}"
 OUTPUT_DIR="$(pwd)/test_outputs"
+OOD_DATA_DIR="$(pwd)/ood_data"
 EXTRA_DOCKER_ARGS=""
 EXTRA_TEST_ARGS=""
 SHELL_MODE=false
@@ -91,6 +92,15 @@ fi
 mkdir -p "$OUTPUT_DIR"
 echo "  Output dir: $OUTPUT_DIR"
 
+# OOD data (repo-tracked OOD bddl/init suites)
+OOD_MOUNT=""
+if [[ -d "$OOD_DATA_DIR" ]]; then
+    OOD_MOUNT="-v $OOD_DATA_DIR:/tmp/ood_data:ro"
+    echo "  OOD data: $OOD_DATA_DIR (mounted)"
+else
+    echo "  OOD data: $OOD_DATA_DIR NOT FOUND — OOD tests may fail"
+fi
+
 # ── Container entrypoint script ──────────────────────────
 # Claude Code 인증 설정 + test_local.py 실행
 
@@ -113,6 +123,23 @@ if [ -f /tmp/.credentials.json ]; then
 }
 CJSON
 fi
+
+# OOD 데이터 병합 (호스트 ood_data/ -> 컨테이너 LIBERO-PRO)
+# ood_data/ 는 parent repo 에서 버전 관리되는 OOD suite bddl/init 파일
+if [ -d /tmp/ood_data ]; then
+    if [ -d /tmp/ood_data/bddl_files ] && [ -n "$(ls -A /tmp/ood_data/bddl_files 2>/dev/null)" ]; then
+        cp -rn /tmp/ood_data/bddl_files/* /workspace/LIBERO-PRO/libero/libero/bddl_files/
+    else
+        echo "WARNING: /tmp/ood_data/bddl_files missing or empty" >&2
+    fi
+    if [ -d /tmp/ood_data/init_files ] && [ -n "$(ls -A /tmp/ood_data/init_files 2>/dev/null)" ]; then
+        cp -rn /tmp/ood_data/init_files/* /workspace/LIBERO-PRO/libero/libero/init_files/
+    else
+        echo "WARNING: /tmp/ood_data/init_files missing or empty" >&2
+    fi
+else
+    echo "WARNING: /tmp/ood_data not mounted — OOD tests will fail" >&2
+fi
 '
 
 # ── Run ──────────────────────────────────────────────────
@@ -125,6 +152,7 @@ if $SHELL_MODE; then
     docker run -it --rm --gpus all --shm-size=8g \
         -e MUJOCO_GL=egl \
         $CLAUDE_MOUNTS \
+        $OOD_MOUNT \
         $EXTRA_DOCKER_ARGS \
         -v "$(pwd)/test_local.py:/workspace/LIBERO-PRO/test_local.py:ro" \
         -v "$OUTPUT_DIR:/workspace/LIBERO-PRO/test_outputs" \
@@ -141,6 +169,7 @@ echo ""
 if docker run --rm --gpus all --shm-size=8g \
     -e MUJOCO_GL=egl \
     $CLAUDE_MOUNTS \
+    $OOD_MOUNT \
     $EXTRA_DOCKER_ARGS \
     -v "$(pwd)/test_local.py:/workspace/LIBERO-PRO/test_local.py:ro" \
     -v "$OUTPUT_DIR:/workspace/LIBERO-PRO/test_outputs" \
@@ -158,6 +187,7 @@ else
     if docker run --rm --gpus all --shm-size=8g \
         -e MUJOCO_GL=osmesa \
         $CLAUDE_MOUNTS \
+        $OOD_MOUNT \
         $EXTRA_DOCKER_ARGS \
         -v "$(pwd)/test_local.py:/workspace/LIBERO-PRO/test_local.py:ro" \
         -v "$OUTPUT_DIR:/workspace/LIBERO-PRO/test_outputs" \

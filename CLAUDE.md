@@ -24,6 +24,9 @@ Libero-pro/
 ├── record_pro_video.py    # LIBERO-PRO OOD 환경 영상 녹화 스크립트
 ├── record_comparison.py   # 원본 LIBERO vs OOD 비교 영상 녹화 스크립트
 ├── .gitignore             # test_outputs/ 제외
+├── ood_data/              # LIBERO-PRO OOD suite bddl/init 파일 (repo-tracked, ~2MB)
+│   ├── bddl_files/            # 16 OOD suites × 10 tasks
+│   └── init_files/            # torch.save 형식 init states
 ├── LIBERO/                # 원본 LIBERO 벤치마크 (git submodule, 수정 없음)
 └── LIBERO-PRO/            # LIBERO-PRO 확장 코드 (수정 없음)
     ├── perturbation.py        # OOD perturbation 엔진 (5종)
@@ -137,18 +140,46 @@ Libero-pro/
 
 ---
 
+### 2026-04-15: OOD 데이터 repo 편입 + 마운트 기반 개발 워크플로우
+
+#### 배경
+LIBERO-PRO 코드를 수정하며 개발할 일이 생길 것이므로, 이미지에 모든 걸 굽기보다는
+**코드/데이터는 호스트에서 마운트**하는 방향으로 전환. CLAUDE.md 의 "개발 워크플로우"
+원칙 (*"컨테이너는 일회용 실행환경, 코드/데이터/결과는 호스트에"*) 과도 일치.
+
+#### `ood_data/` (신규 — 1.9MB)
+- 16개 OOD suite × 10 task × 2 (bddl + init) = 320개 파일
+- `docker cp` 로 기존 v1.1 이미지에서 추출 후 커밋
+- init 파일은 `torch.save()` 형식이라 zip 시그니처로 보이지만 정상
+- `ood_environment` 는 상류 데이터 미완이라 repo 에 포함하지 않음 (기존과 동일)
+
+#### `Dockerfile` (수정)
+- HuggingFace OOD 다운로드 단계 **제거** — 이제 OOD 데이터는 `ood_data/` 가 단일 진실 원본
+- 결과: 이미지 빌드 시간 단축, `huggingface_hub` 의존성 축소, 빌드 결정적
+- 이미지 자체는 OOD 데이터가 없으므로, `run.sh` 없이 생(raw)으로 실행하면 OOD 테스트는 실패
+- 원본 LIBERO bddl/init (비 OOD) 은 그대로 `COPY LIBERO-PRO` 로 이미지에 포함
+
+#### `run.sh` (수정)
+- `OOD_DATA_DIR` 변수 및 마운트 로직 추가 — `$(pwd)/ood_data` → `/tmp/ood_data:ro`
+- `ENTRYPOINT_CMD` 에 컨테이너 시작 시 OOD 파일 병합 단계 추가:
+  - `cp -rn /tmp/ood_data/bddl_files/* /workspace/LIBERO-PRO/libero/libero/bddl_files/`
+  - `cp -rn` (no-clobber) 이므로 원본 LIBERO suites 는 안 덮어씀
+- 3개 `docker run` 블록 (shell / EGL / osmesa) 모두에 `$OOD_MOUNT` 적용
+
+---
+
 ## Docker 이미지 정보
 
-- **이미지**: `bigenlight/libero-pro:latest` (= `v1.1`)
-- **크기**: ~25GB (OOD 데이터 포함)
+- **이미지**: `bigenlight/libero-pro:latest` (= `v1.2`)
+- **크기**: ~23GB (v1.1 의 HF 레이어 ~20MB 만 제거된 수준, 사실상 동일)
 - **WORKDIR**: `/workspace/LIBERO-PRO`
 - **렌더링**: `MUJOCO_GL=egl` (기본), `osmesa` (fallback)
-- **HuggingFace `zhouxueyang/LIBERO-Pro` bddl/init 데이터 내장**
-- **버그 3개 패치 완료** (이미지 빌드 시 적용):
+- **OOD 데이터**: 이미지에 없음 — `ood_data/` 가 mount + copy 되어 런타임에 병합
+- **버그 3개 패치 완료** (v1.0 부터 소스 수정으로 적용):
   1. `ood_object.yaml` line 39 빈 키 → `wooden_cabinet:` 
   2. `perturbation.py` line 658 `seed=int` → `seed=42`
   3. `generate_init_states.py` zipfile → `torch.save()`
-- **이미지 재빌드 없이** `test_local.py`를 마운트해서 테스트 가능
+- **이미지 재빌드 없이** `test_local.py` + `ood_data/` 를 마운트해서 테스트 가능
 
 ---
 
@@ -159,7 +190,9 @@ Libero-pro/
 - [x] 로컬에서 `./run.sh` 실행 — **10/10 PASS** (EGL, RTX 3060 12GB, v1.1, 2026-04-08)
 - [x] LIBERO-PRO OOD 데이터 이미지 내장 (v1.1)
 - [x] OOD 환경 테스트 추가 (test 8, 9)
-- [ ] 원격 서버(aadd, RTX A6000 x4)에서 eval 검증
+- [x] 원격 서버(aadd, RTX A6000 x4) eval 환경 검증 — **10/10 PASS** (v1.1, 2026-04-15)
+- [x] OOD 데이터 repo 편입 + 마운트 기반 워크플로우 (v1.2, 2026-04-15)
+- [ ] 원격 서버에서 v1.2 재검증 (현재는 로컬 RTX 3060 에서만 검증)
 - [ ] train 이미지 빌드 (데이터셋 포함)
 - [ ] bc_transformer baseline 학습
 - [ ] VLA 모델 LIBERO-PRO 평가
@@ -173,7 +206,7 @@ Libero-pro/
 | `use_task` 언어 지시 버그 (#14) | 미해결 | VLA 통합 시 workaround 필요 |
 | OpenVLA 결과 불일치 (#20) | 미확인 | 평가 전 확인 필요 |
 | Environment BDDL 미출시 (#9) | 업스트림 대기 | `ood_environment.yaml`은 있으나 데이터 미완 |
-| OOD suite init_states | 해결 (v1.1) | HuggingFace 데이터 이미지 내장으로 자동 포함 |
+| OOD suite init_states | 해결 (v1.2) | `ood_data/` 가 repo 에 편입되어 `run.sh` 가 런타임에 병합 |
 
 ---
 
