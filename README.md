@@ -51,15 +51,18 @@ docker run --rm --gpus all nvidia/cuda:11.3.1-base-ubuntu20.04 nvidia-smi
 
 | 태그 | 내용 | 크기 |
 |------|------|------|
-| `v1.2` = `latest` | Base 환경 (OOD 데이터는 `ood_data/` 에서 런타임 마운트) | ~23GB |
+| `v1.3` = `latest` | Base 환경 (**LIBERO/LIBERO-PRO 소스, OOD 데이터 모두 런타임 마운트**) | ~15GB |
+| `v1.2` | Base 환경 + LIBERO-PRO 소스 내장 (OOD 만 마운트) | ~23GB |
 | `v1.1` | Base 환경 + OOD bddl/init 데이터 내장 (HF 다운로드) | ~25GB |
 | `v1.0` | Base 환경 (OOD 데이터 없음) | ~23GB |
 | `train` | Base + 학습 데이터셋 포함 (예정) | ~60GB+ |
 
-> **v1.2 변경**: OOD bddl/init 데이터(~2MB)가 이 리포의 `ood_data/` 디렉토리로 이동했다.
-> `run.sh` 가 자동으로 `ood_data/` 를 컨테이너에 마운트해서 `/workspace/LIBERO-PRO` 의
-> bddl_files / init_files 로 병합한다. HuggingFace 런타임 의존성이 없어졌고, OOD 데이터
-> 소스가 이미지와 분리되어 **코드 수정 → 즉시 반영** 워크플로우가 가능해졌다.
+> **v1.3 변경 (2026-04-21)**: LIBERO-PRO 및 LIBERO 소스를 이미지에서 제거하고 호스트
+> bind mount 로 전환했다. 이미지는 CUDA + PyTorch + pip 의존성만 포함한다. 소스 수정이
+> 재빌드 없이 즉시 반영되며, 이미지 크기는 ~23GB → ~15GB 로 감소.
+>
+> **사용 전 필수**: 아래 "빠른 시작" 의 `git clone` 두 줄을 **반드시** 먼저 실행해야 한다.
+> 소스가 없으면 `run.sh` 가 에러로 종료된다.
 
 ### 이미지 구성
 
@@ -79,7 +82,32 @@ docker run --rm --gpus all nvidia/cuda:11.3.1-base-ubuntu20.04 nvidia-smi
 docker pull bigenlight/libero-pro:latest
 ```
 
-### 2. 컨테이너 실행
+### 2. LIBERO / LIBERO-PRO 소스 Clone (v1.3 부터 필수)
+
+v1.3 이미지는 소스를 포함하지 않는다. 이 리포의 루트에서 두 upstream repo 를 clone 한다:
+
+```bash
+cd Libero-pro_benchmark
+git clone https://github.com/Zxy-MLlab/LIBERO-PRO.git LIBERO-PRO
+git clone https://github.com/Lifelong-Robot-Learning/LIBERO.git LIBERO
+```
+
+두 디렉토리는 `.gitignore` 에 등록되어 있어 parent repo 에 포함되지 않는다. `run.sh` 가
+자동으로 컨테이너에 bind mount 한다:
+
+| 호스트 | 컨테이너 | 모드 | 역할 |
+|--------|----------|------|------|
+| `LIBERO-PRO/` | `/workspace/LIBERO-PRO` | rw | LIBERO-PRO 확장 코드 (perturbation, libero_ood, libero) |
+| `LIBERO/` | `/workspace/LIBERO` | ro | 원본 LIBERO (비교/참고용, optional) |
+| `ood_data/` | `/tmp/ood_data` | ro | OOD bddl/init 파일 (런타임에 LIBERO-PRO 로 병합) |
+
+이미지에는 `PYTHONPATH=/workspace/LIBERO-PRO:/workspace/LIBERO` 가 설정되어 있어서,
+마운트만 되면 `from libero.libero import benchmark` 와 `from perturbation import ...` 가 바로 작동한다 (editable install 불필요).
+
+> **왜 마운트인가?** 컨테이너는 일회용 실행환경으로 취급하고 코드/데이터/결과는 호스트에 둔다.
+> 소스 수정이 재빌드 없이 즉시 반영되고, 실험 결과도 `test_outputs/` 에 영속된다.
+
+### 3. 컨테이너 실행
 
 **권장: `run.sh` 사용** (Claude Code 인증 자동 주입)
 
@@ -113,7 +141,7 @@ docker run -it --gpus all --shm-size=8g \
 
 </details>
 
-### 3. 컨테이너 내부 확인
+### 4. 컨테이너 내부 확인
 
 ```bash
 # 환경 확인
@@ -323,6 +351,7 @@ python benchmark_scripts/download_libero_datasets.py --datasets all --use-huggin
 - [x] 로컬 검증 10/10 PASS (RTX 3060 12GB, EGL, v1.1→v1.2, 2026-04-08/15)
 - [x] 원격 서버(aadd, RTX A6000 × 4) eval 환경 검증 — 10/10 PASS (v1.1, 2026-04-15)
 - [x] 원격 서버에서 v1.2 재검증 — 10/10 PASS (2026-04-15)
+- [x] LIBERO / LIBERO-PRO 소스까지 완전 마운트화 (`v1.3`, 2026-04-21)
 - [ ] `train` 태그 이미지 (데이터셋 포함) 빌드
 - [ ] bc_transformer_policy baseline 학습
 - [ ] VLA 모델 LIBERO-PRO 평가

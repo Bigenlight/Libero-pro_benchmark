@@ -35,38 +35,36 @@ RUN pip install --no-cache-dir \
     torchaudio==0.11.0 \
     --extra-index-url https://download.pytorch.org/whl/cu113
 
-WORKDIR /workspace
-
-# LIBERO-PRO 설치 (원본 LIBERO 별도 설치 불필요 - LIBERO-PRO가 완전 상위호환)
-COPY LIBERO-PRO /workspace/LIBERO-PRO
-WORKDIR /workspace/LIBERO-PRO
-RUN pip install --no-cache-dir -r requirements.txt
-RUN pip install --no-cache-dir -e .
-
-# NOTE: OOD bddl/init 데이터는 parent repo의 ood_data/ 에 버전 관리되며
-# run.sh 가 컨테이너 시작 시 /workspace/LIBERO-PRO/libero/libero/{bddl_files,init_files}/ 로 병합한다.
-# 따라서 HuggingFace 다운로드 단계는 제거됨 (이미지 빌드 시간/크기 절약).
+# ── v1.3: LIBERO/LIBERO-PRO 소스는 이미지에 굽지 않는다 ──
+# 런타임에 호스트 clone을 /workspace/LIBERO-PRO 와 /workspace/LIBERO 로 bind mount 한다.
+# 빌드 단계에서는 pip 의존성만 설치하기 위해 upstream repo 에서 requirements.txt 를 임시로 가져와 설치한다.
+# (LIBERO-PRO == LIBERO 포크, requirements.txt 동일)
+RUN git clone --depth 1 https://github.com/Zxy-MLlab/LIBERO-PRO.git /tmp/libero-pro \
+    && pip install --no-cache-dir -r /tmp/libero-pro/requirements.txt \
+    && rm -rf /tmp/libero-pro
 
 # ~/.libero/config.yaml 사전 생성 (없으면 import 시 interactive prompt 발생)
-RUN mkdir -p /root/.libero && cat > /root/.libero/config.yaml << 'EOF'
-benchmark_root: /workspace/LIBERO-PRO/libero/libero
-bddl_files: /workspace/LIBERO-PRO/libero/libero/bddl_files
-init_states: /workspace/LIBERO-PRO/libero/libero/init_files
-datasets: /workspace/LIBERO-PRO/libero/datasets
-assets: /workspace/LIBERO-PRO/libero/libero/assets
-EOF
+# 경로는 런타임 마운트 경로(/workspace/LIBERO-PRO)와 일치해야 한다.
+RUN mkdir -p /root/.libero && printf '%s\n' \
+    'benchmark_root: /workspace/LIBERO-PRO/libero/libero' \
+    'bddl_files: /workspace/LIBERO-PRO/libero/libero/bddl_files' \
+    'init_states: /workspace/LIBERO-PRO/libero/libero/init_files' \
+    'datasets: /workspace/LIBERO-PRO/libero/datasets' \
+    'assets: /workspace/LIBERO-PRO/libero/libero/assets' \
+    > /root/.libero/config.yaml
 
 # robosuite macros_private.py 초기화 (없으면 매번 경고 출력됨)
 RUN python /usr/local/lib/python3.8/dist-packages/robosuite/scripts/setup_macros.py
 
-# 설치 검증
+# 최소 설치 검증 (libero 는 런타임 마운트 이후에만 import 가능하므로 여기선 torch/robosuite 만 확인)
 RUN python -c "\
-import torch; print('PyTorch:', torch.__version__); \
+import torch; print('PyTorch:', torch.__version__, 'CUDA:', torch.version.cuda); \
 import robosuite; print('robosuite:', robosuite.__version__); \
-from libero.libero import get_libero_path; \
-print('bddl_files:', get_libero_path('bddl_files')); \
-print('All OK') \
+print('Image build OK. LIBERO-PRO source must be mounted at runtime to /workspace/LIBERO-PRO') \
 "
 
+# LIBERO-PRO 소스는 런타임에 여기로 bind mount 된다. 빌드 시점에는 비어있다.
 WORKDIR /workspace/LIBERO-PRO
+ENV PYTHONPATH=/workspace/LIBERO-PRO:/workspace/LIBERO:${PYTHONPATH}
+
 CMD ["/bin/bash"]

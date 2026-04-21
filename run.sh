@@ -11,6 +11,8 @@ set -euo pipefail
 IMAGE="${LIBERO_IMAGE:-bigenlight/libero-pro:latest}"
 OUTPUT_DIR="$(pwd)/test_outputs"
 OOD_DATA_DIR="$(pwd)/ood_data"
+LIBERO_PRO_SRC="$(pwd)/LIBERO-PRO"
+LIBERO_SRC="$(pwd)/LIBERO"
 EXTRA_DOCKER_ARGS=""
 EXTRA_TEST_ARGS=""
 SHELL_MODE=false
@@ -140,6 +142,25 @@ else
     echo "  OOD data: $OOD_DATA_DIR NOT FOUND — OOD tests may fail"
 fi
 
+# LIBERO-PRO / LIBERO 소스 (v1.3 부터: 이미지에 포함되지 않음 - 반드시 호스트 clone 마운트 필요)
+SRC_MOUNT=""
+if [[ -d "$LIBERO_PRO_SRC" ]]; then
+    SRC_MOUNT="$SRC_MOUNT -v $LIBERO_PRO_SRC:/workspace/LIBERO-PRO"
+    echo "  LIBERO-PRO source: $LIBERO_PRO_SRC (mounted rw)"
+else
+    echo "ERROR: $LIBERO_PRO_SRC not found."
+    echo "       v1.3 이미지는 소스를 포함하지 않습니다. 먼저 clone 해주세요:"
+    echo "         git clone https://github.com/Zxy-MLlab/LIBERO-PRO.git $LIBERO_PRO_SRC"
+    exit 1
+fi
+if [[ -d "$LIBERO_SRC" ]]; then
+    SRC_MOUNT="$SRC_MOUNT -v $LIBERO_SRC:/workspace/LIBERO:ro"
+    echo "  LIBERO source: $LIBERO_SRC (mounted ro)"
+else
+    echo "WARNING: $LIBERO_SRC not found. 원본 LIBERO 는 optional 이지만 일관성을 위해 clone 권장:"
+    echo "           git clone https://github.com/Lifelong-Robot-Learning/LIBERO.git $LIBERO_SRC"
+fi
+
 # ── Container entrypoint script ──────────────────────────
 # Claude Code 인증 설정 + test_local.py 실행
 
@@ -196,6 +217,7 @@ if $VLA_EVAL_MODE; then
     docker run --rm --gpus all --shm-size=8g --network host \
         -e MUJOCO_GL=egl \
         -e VLA_SERVER_URL="$VLA_URL" \
+        $SRC_MOUNT \
         $OOD_MOUNT \
         $EXTRA_DOCKER_ARGS \
         -v "$(pwd)/scripts:/workspace/LIBERO-PRO/scripts:ro" \
@@ -227,6 +249,7 @@ if $SHELL_MODE; then
     docker run -it --rm --gpus all --shm-size=8g \
         -e MUJOCO_GL=egl \
         $CLAUDE_MOUNTS \
+        $SRC_MOUNT \
         $OOD_MOUNT \
         $EXTRA_DOCKER_ARGS \
         -v "$(pwd)/test_local.py:/workspace/LIBERO-PRO/test_local.py:ro" \
@@ -244,6 +267,7 @@ echo ""
 if docker run --rm --gpus all --shm-size=8g \
     -e MUJOCO_GL=egl \
     $CLAUDE_MOUNTS \
+    $SRC_MOUNT \
     $OOD_MOUNT \
     $EXTRA_DOCKER_ARGS \
     -v "$(pwd)/test_local.py:/workspace/LIBERO-PRO/test_local.py:ro" \
@@ -262,6 +286,7 @@ else
     if docker run --rm --gpus all --shm-size=8g \
         -e MUJOCO_GL=osmesa \
         $CLAUDE_MOUNTS \
+        $SRC_MOUNT \
         $OOD_MOUNT \
         $EXTRA_DOCKER_ARGS \
         -v "$(pwd)/test_local.py:/workspace/LIBERO-PRO/test_local.py:ro" \
